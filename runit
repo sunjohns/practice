@@ -1,0 +1,217 @@
+#!/bin/bash
+# Author        : sunjohn
+# Email         : szy1090271342@163.com
+# Last modified : 2018-02-02 07:15
+# Filename      : runit
+# Description   : homework
+
+
+set -o pipefail
+
+procfile=""
+envfile=""
+SPORT=8080
+COLOR=('28' '13' '14' '33' '34')
+
+
+#####################################
+#Function:usage
+#####################################
+
+function usage() {
+    echo "Usage: runit [-c] [-f procfile|Procfile] [-e envfile|.env]
+             -c: check procfile and envfile
+             -f: load procfile
+             -e: load envfile
+             -h: help info
+             "
+}
+
+#####################################
+#Function:verify procfile
+#####################################
+
+function verify_proc() {
+    local proc_file="$1"
+    local retu_val=0
+
+    [[ ! -f "${proc_file}" ]] && my_error "verify procfile not exists" && return 1
+
+    while read nextline ; do
+        if echo "${nextline}" | grep -v ":"; then
+            my_error "no_colon_mark"
+            continue
+        fi
+        key="${nextline%%:*}"
+        value="${nextline#*:}"
+        echo "${key}" | grep -q [^a-zA-Z_] && my_error "exist_invalid_char" && retu_val=1
+    done < <(grep -vE "^[[:space:]]*#" "${proc_file}")
+    return ${retu_val}
+}
+
+#####################################
+#Function:verify envfile
+#####################################
+
+function verify_env() {
+    local env_file="$1"
+    local retu_val=0
+
+    [[ ! -f "${env_file}" ]] && my_error "verify envfile not exists" && return 1
+    while read nextline; do
+        if echo "${nextline}" | grep -v "="; then
+            my_error "no_equal_mark"
+            continue
+        fi
+        key="${nextline%%=*}"
+        value="${nextline#*=}"
+        echo "${key}" | grep -q "[^a-zA-Z_]" && my_error "exist_invalid_char" && retu_val=1
+        echo "${value}" | grep -qE "[[:space:]]" && my_error "value_have_space" && retu_val=1
+    done < <(grep -vE "^[[:space:]]*#" "${env_file}" | grep -v "^$")
+    return ${retu_val}
+}
+
+#####################################
+#Function:print log information
+#####################################
+
+function log() {
+    local name="$1"
+    local command="$2"
+    local color="$3"
+    cur_time=$(date +%H:%M:%s)
+
+    printf "\E[${color}m${cur_time} %-7s] | " "${name}"
+
+    tput sgr0
+    echo "${command}"
+    return 0
+}
+
+#####################################
+#Function:run command
+#####################################
+
+function run_command() {
+    local num="1"
+    local proc_name="$1"
+    local command="$2"
+    local current_pid=$!
+    local current_color="${COLOR[$number]}"
+    local com_port=$(echo "${command}" | grep -e "\$PORT")
+
+    [[ -n "${com_port}" ]] && [[ -z "${PORT}" ]] && PORT=8080
+    bash -c "${command}" > >(
+        while read result; do
+            log "${proc_name}" "${result}" "${COLOR}"
+        done
+    ) 2>&1 &
+
+    local out="$(eval echo \"${command}\")"
+    log "${proc_name}" "${out} start pid is ${current_pid}" "${current_color}"
+    [[ $? -ne 0 ]] && return 1
+
+    [[ -n "${com_port}" ]] && PORT=$((${PORT} + 1))
+
+    (( num ++ ))
+
+    return 0
+}
+
+#####################################
+#Function:load env_file
+#####################################
+
+function load_env_file() {
+    set -a
+    local env_list="$1"
+    for flag in $(echo "${env_list}"); do
+        [[ -f "${flag}" ]] && source "${flag}"
+    done
+    return 0
+}
+
+#####################################
+#Function:run procfile
+#####################################
+
+function run_procfile() {
+    local proc_file="$1"
+    [[ ! -f "${proc_file}" ]] && my_error "the procfile is not exists" && return 1
+    while read nextline; do
+        if echo "${nextline}" | grep -qv ":"; then
+            my_error "no_colon_command"
+            continue
+        fi
+        local key="${nextline%%:*}"
+        local value="${nextline#*:}"
+        [[ -n "${key}" ]] && [[ -n "${value}" ]] && run_command "${key}" "${value}"
+        [[ $? -ne 0 ]] && return 1
+    done < <(grep "" "${proc_file}" | grep -vE "[[:space:]]*#" | grep -v "^$" )
+    wait
+    return 0
+}
+
+#####################################
+#Function:print error information
+#####################################
+
+function my_error() {
+    error="$1"
+    echo "${error}"
+}
+
+#####################################
+#Function:main function
+#####################################
+
+function main() {
+    local check=false
+    while getopts "f:e:ch" flag
+    do
+        case ${flag} in
+            c) check=true ;;
+            f) procfile="${OPTARG}" ;;
+            e) envfile="${OPTARG}" ;;
+            *) usage ;;
+        esac
+    done
+
+    if ${check}; then
+        if [[ -n "${procfile}" ]]; then
+            verify_proc "${procfile}"
+            PROC_RETU_VALUE=$?
+            [[ ${PROC_RETU_VALUE} -ne 0 ]] && exit 1
+        else
+            my_error "The procfile is null"
+            exit 1
+        fi
+
+        if [[ -z "${envfile}" ]];then
+            envfile="./.env"
+        fi
+        verify_env  "${envfile}"
+        ENV_RETU_VALUE=$?
+        [[ ${ENV_RETU_VALUE} -ne 0 ]] && exit 1
+
+    else
+        if [[ -z "${envfile}" ]]; then
+            envfile="./.env"
+        fi
+
+        load_env_file "${envfile}"
+        ENV_RETU_VALUE=$?
+        [[ ${ENV_RETU_VALUE} -ne 0 ]] && exit 1
+
+        if [[ -z "${procfile}" ]]; then
+            procfile="./Procfile"
+        fi
+
+        run_procfile "${procfile}"
+        RUN_RETU_VALUE=$?
+        [[ RUN_RETU_VALUE -ne 0 ]] && exit 1
+    fi
+    exit 0
+} 
+
+main "$@"
